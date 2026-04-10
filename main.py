@@ -17,7 +17,7 @@ if __name__ == "__main__":
     options_cleaned = process_and_filter_options(options_raw, current_spot)
     
     # 4. Affichage des résultats pour ton rapport technique
-    print(f"--- Phase 1 : Pipeline Deribit {CURRENCY} ---")
+    print(f"Pipeline Deribit {CURRENCY}")
     print(f"Prix Spot détecté : {current_spot}")
     print(f"Instruments totaux : {len(options_raw) + len(futures_raw)}")
     print(f"Options après filtres (Spread 25% + Arbitrage) : {len(options_cleaned)}")
