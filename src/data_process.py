@@ -31,31 +31,30 @@ def get_deribit_data(currency="BTC"):
 
 def process_and_filter_options(df_options, spot_price):
     """
-    Nettoyage du dataset et vérification d'arbitrage.
+    Nettoyage complet : Spread, Moneyness et Arbitrage Statistique.
     """
-    # Calcul du mid-price si absent et du spread bid-ask relatif
+    # A. Calcul du mid-price et du spread [cite: 14, 15]
     df_options['mid_price'] = (df_options['best_bid_price'] + df_options['best_ask_price']) / 2
     df_options['spread'] = (df_options['best_ask_price'] - df_options['best_bid_price']) / df_options['mid_price']
     
-    # Filtre 1 : Exclusion des spreads > 25% 
+    # B. Filtre 1 : Exclusion des spreads > 25% du mid-price 
     df_filtered = df_options[df_options['spread'] <= 0.25].copy()
     
-    # Calcul de la valeur intrinsèque pour l'arbitrage statistique 
-    # Call : max(0, S - K) | Put : max(0, K - S)
-    df_filtered['intrinsic_val'] = np.where(
-        df_filtered['option_type'] == 'call',
-        (spot_price - df_filtered['strike']).clip(lower=0),
-        (df_filtered['strike'] - spot_price).clip(lower=0)
-    )
+    # C. Calcul de la valeur intrinsèque (Vérification d'arbitrage) 
+    # Attention : sur Deribit, si le mid_price est en BTC, multiplie-le par spot_price 
+    # pour comparer des USD avec des USD.
     
-    # Filtre 2 : Vérification arbitrage (Prime >= Valeur Intrinsèque) 
-    df_filtered = df_filtered[df_filtered['mid_price'] >= df_filtered['intrinsic_val']]
+    # Pour les Calls : max(0, Spot - Strike) 
+    is_call = df_filtered['option_type'] == 'call'
+    df_filtered.loc[is_call, 'intrinsic_val'] = (spot_price - df_filtered['strike']).clip(lower=0)
     
-    # Filtre 3 : Élimination des options trop loin hors/dans la monnaie [cite: 15]
-    # On garde les strikes entre 50% et 150% du spot (ajustable)
-    df_filtered = df_filtered[
-        (df_filtered['strike'] > spot_price * 0.5) & 
-        (df_filtered['strike'] < spot_price * 1.5)
-    ]
+    # Pour les Puts : max(0, Strike - Spot) 
+    is_put = df_filtered['option_type'] == 'put'
+    df_filtered.loc[is_put, 'intrinsic_val'] = (df_filtered['strike'] - spot_price).clip(lower=0)
+    
+    # D. Filtre 2 : Vérification arbitrage (Prime >= Valeur Intrinsèque) 
+    # On convertit ici la prime en USD pour la comparaison
+    df_filtered['mid_price_usd'] = df_filtered['mid_price'] * spot_price
+    df_filtered = df_filtered[df_filtered['mid_price_usd'] >= df_filtered['intrinsic_val']]
     
     return df_filtered
