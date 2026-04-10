@@ -1,38 +1,29 @@
-def main():
-    print("Hello from projet-optim-ia!")
+import pandas as pd
+# On importe les fonctions depuis le script de traitement data_process.py
 
-
+from src.data_process import get_deribit_data, process_and_filter_options
 if __name__ == "__main__":
-    main()
+    CURRENCY = "BTC"
+    
+    # 1. Récupération brute
+    options_raw, futures_raw = get_deribit_data(CURRENCY)
+    
+    # 2. Extraction du spot dynamique depuis les futures
+    # On cherche le prix mid du perpétuel
+    perp = futures_raw[futures_raw['instrument_name'].str.contains('PERPETUAL')]
+    current_spot = perp['mid_price'].iloc[0] if not perp.empty else 65000
+    
+    # 3. Traitement et Filtrage (Phase 1 du projet)
+    options_cleaned = process_and_filter_options(options_raw, current_spot)
+    
+    # 4. Affichage des résultats pour ton rapport technique
+    print(f"--- Phase 1 : Pipeline Deribit {CURRENCY} ---")
+    print(f"Prix Spot détecté : {current_spot}")
+    print(f"Instruments totaux : {len(options_raw) + len(futures_raw)}")
+    print(f"Options après filtres (Spread 25% + Arbitrage) : {len(options_cleaned)}")
+    
+    # Aperçu pour ton extraction des résultats (attendu dans le projet)
+    print(options_cleaned[['instrument_name', 'strike', 'mid_price', 'spread']].head())
 
-from src.data_process import get_active_options, get_order_book, calculate_mid_price
-
-def main():
-    print("Démarrage de la récupération des données BTC...")
-    
-    # 1. Liste des instruments
-    options_list = get_active_options("BTC")
-    
-    # 2. On ne prend que les 10 premières pour tester le code
-    test_subset = options_list.head(10).copy()
-    
-    bids, asks, mids = [], [], []
-    
-    for name in test_subset['instrument_name']:
-        print(f"Récupération des prix pour : {name}")
-        bid, ask = get_order_book(name)
-        mid = (bid + ask) / 2 # Calcul du mid-price demandé 
-        
-        bids.append(bid)
-        asks.append(ask)
-        mids.append(mid)
-    
-    test_subset['bid'] = bids
-    test_subset['ask'] = asks
-    test_subset['mid_price'] = mids
-    
-    print("\nAperçu des données récupérées :")
-    print(test_subset.head())
-
-if __name__ == "__main__":
-    main()
+    # Sauvegarde optionnelle pour la Phase 2 (Nelson-Siegel)
+    # options_cleaned.to_csv("data_cleaned.csv")
