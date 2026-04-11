@@ -10,9 +10,10 @@ from src.rates_model import (
 )
 from src.SSVI import (
     get_implied_vol, 
-    calibrate_ssvi_slice, 
-    get_ssvi_price,
+    calibrate_full_surface_ssvi,  # Nouvelle fonction globale
+    ssvi_phi_function,           # Pour reconstruire phi(theta)
     ssvi_variance_total,
+    get_ssvi_price,
     calculate_greeks
 )
 
@@ -43,17 +44,16 @@ if __name__ == "__main__":
 
     params_ns = calibrate_nelson_siegel(raw_rates)
     b0, b1, b2, tau = params_ns
-    mse_ns, mae_ns, _ = evaluate_ns_performance(raw_rates, params_ns)
+    _, mae_ns, _ = evaluate_ns_performance(raw_rates, params_ns)
     print(f"Précision Nelson-Siegel (MAE) : {mae_ns:.6f}")
 
     # ==========================================================
-    # PHASE 3 : VOLATILITÉ IMPLICITE ET SSVI
+    # PHASE 3 : VOLATILITÉ IMPLICITE ET SURFACE SSVI GLOBALE
     # ==========================================================
-    print(f"\n--- Phase 3 : Calibration de la Volatilité SSVI ---")
+    print(f"\n--- Phase 3 : Calibration de la Surface SSVI Globale ---")
     
     vols_list = []
     for _, row in options_cleaned.iterrows():
-        # Utilisation de 'T' (calculé dans data_process)
         r_t = nelson_siegel(row['T'], b0, b1, b2, tau)
         iv = get_implied_vol(row['mid_price_usd'], current_spot, row['strike'], row['T'], r_t, row['option_type'])
         
@@ -67,60 +67,60 @@ if __name__ == "__main__":
             })
 
     df_vols = pd.DataFrame(vols_list)
-    ssvi_params_storage = {} 
 
+    # Calibration de la surface complète (Rho, Eta, Gamma)
+    rho_surf, eta_surf, gamma_surf = calibrate_full_surface_ssvi(df_vols)
+    
+    print(f"Paramètres Surface Calibrés :")
+    print(f"  > Rho (Skew)    : {rho_surf:.4f}")
+    print(f"  > Eta (Vol-of-Vol): {eta_surf:.4f}")
+    print(f"  > Gamma (Power) : {gamma_surf:.4f}")
+
+    # Reconstruction des paramètres par maturité pour le pricing
+    ssvi_params_storage = {}
     for t in sorted(df_vols['T'].unique()):
-        slice_data = df_vols[df_vols['T'] == t]
-        if len(slice_data) < 3: continue
+        subset_t = df_vols[df_vols['T'] == t]
+        # On définit theta_t comme la variance ATM à cette maturité
+        theta_t = subset_t.iloc[abs(subset_t['k']).argmin()]['w']
+        # Calcul de phi(theta) selon la loi de puissance de Gatheral
+        phi_t = ssvi_phi_function(theta_t, eta_surf, gamma_surf)
         
-        # Variance ATM
-        theta_atm = slice_data.iloc[abs(slice_data['k']).argmin()]['w']
-        
-        # Calibration
-        rho, phi = calibrate_ssvi_slice(slice_data['k'].values, slice_data['w'].values, theta_atm)
-        ssvi_params_storage[t] = {'theta': theta_atm, 'rho': rho, 'phi': phi}
-        print(f"Maturité T={t:.3f} | Rho={rho:.2f} | Phi={phi:.2f}")
+        ssvi_params_storage[t] = {'theta': theta_t, 'rho': rho_surf, 'phi': phi_t}
 
     # ==========================================================
     # PHASE 4 : CALCUL DES GRECQUES ET EXPORT FINAL
     # ==========================================================
-    print(f"\n--- Phase 4 : Calcul des Grecques (via SSVI) ---")
+    print(f"\n--- Phase 4 : Calcul des Grecques (via Surface Lissée) ---")
     
     final_data = []
     for _, row in df_vols.iterrows():
         t = row['T']
-        if t in ssvi_params_storage:
-            p = ssvi_params_storage[t]
-            
-            # 1. Calcul de la volatilité lissée par le modèle SSVI
-            w_ssvi = ssvi_variance_total(row['k'], p['theta'], p['rho'], p['phi'])
-            sigma_ssvi = np.sqrt(max(0, w_ssvi / t))
-            
-            # 2. Calcul du prix théorique SSVI
-            p_ssvi = get_ssvi_price(current_spot, row['strike'], t, row['r'], p['theta'], p['rho'], p['phi'], row['option_type'])
-            
-            # 3. Calcul des Grecques
-            g = calculate_greeks(current_spot, row['strike'], t, row['r'], sigma_ssvi, row['option_type'])
-            
-            final_data.append({
-                'T': t, 'Strike': row['strike'], 'Type': row['option_type'],
-                'Market_Price': row['market_price'], 'SSVI_Price': p_ssvi,
-                'IV_Market': row['iv'], 'IV_SSVI': sigma_ssvi,
-                'Delta': g['delta'], 'Gamma': g['gamma'], 'Vega': g['vega'], 'Theta': g['theta']
-            })
+        p = ssvi_params_storage[t]
+        
+        # 1. Volatilité lissée issue de la surface globale
+        w_ssvi = ssvi_variance_total(row['k'], p['theta'], p['rho'], p['phi'])
+        sigma_ssvi = np.sqrt(max(0, w_ssvi / t))
+        
+        # 2. Prix théorique cohérent avec la surface
+        p_ssvi = get_ssvi_price(current_spot, row['strike'], t, row['r'], p['theta'], p['rho'], p['phi'], row['option_type'])
+        
+        # 3. Grecques analytiques
+        g = calculate_greeks(current_spot, row['strike'], t, row['r'], sigma_ssvi, row['option_type'])
+        
+        final_data.append({
+            'T': t, 'Strike': row['strike'], 'Type': row['option_type'],
+            'Market_Price': row['market_price'], 'SSVI_Price': p_ssvi,
+            'IV_Market': row['iv'], 'IV_SSVI': sigma_ssvi,
+            'Delta': g['delta'], 'Gamma': g['gamma'], 'Vega': g['vega'], 'Theta': g['theta']
+        })
 
     df_final = pd.DataFrame(final_data)
-    
-    # Métriques de prix
     mae_price = np.mean(np.abs(df_final['SSVI_Price'] - df_final['Market_Price']))
-    print(f"Erreur moyenne de pricing : {mae_price:.2f} USD")
+    
+    print(f"Erreur moyenne de pricing sur la surface : {mae_price:.2f} USD")
+    print("\nAperçu des 5 premières lignes du rapport final :")
+    print(df_final[['T', 'Strike', 'Type', 'Delta', 'IV_SSVI', 'SSVI_Price']].head().to_string(index=False))
 
-    # Affichage des résultats
-    print("\nAperçu des résultats (5 premières lignes) :")
-    cols_show = ['T', 'Strike', 'Type', 'Delta', 'Gamma', 'Vega', 'Market_Price', 'SSVI_Price']
-    print(df_final[cols_show].head().to_string(index=False))
-
-    # Exportation CSV pour ton Github / Société Générale
-    output_file = "analyse_options_complete.csv"
-    df_final.to_csv(output_file, index=False)
-    print(f"\nPipeline terminé. Résultats exportés dans '{output_file}'")
+    # Exportation finale
+    df_final.to_csv("surface_vol_complete_btc.csv", index=False)
+    print(f"\nFichier 'surface_vol_complete_btc.csv' généré avec succès.")
