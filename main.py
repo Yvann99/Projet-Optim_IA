@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import numpy as np
 from src.data_process import get_deribit_data, process_and_filter_options
 from src.rates_model import extract_implicit_rates, calibrate_nelson_siegel, nelson_siegel
 
