@@ -97,3 +97,48 @@ def get_ssvi_price(S, K, T, r, theta_atm, rho, phi, option_type='call'):
     
     # 4. Calcul du prix via Black-Scholes
     return black_scholes_price(S, K, T, r, sigma_ssvi, option_type)
+
+def calculate_greeks(S, K, T, r, sigma, option_type='call'):
+    """
+    Calcule les principales grecques via le modèle Black-Scholes.
+    """
+    if T <= 0 or sigma <= 0:
+        return {'delta': 0, 'gamma': 0, 'vega': 0, 'theta': 0}
+
+    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    
+    # PDF et CDF de la loi normale
+    pdf_d1 = norm.pdf(d1)
+    cdf_d1 = norm.cdf(d1)
+    cdf_d2 = norm.cdf(d2)
+
+    # 1. DELTA
+    if option_type == 'call':
+        delta = cdf_d1
+    else:
+        delta = cdf_d1 - 1
+
+    # 2. GAMMA (Identique Call/Put)
+    gamma = pdf_d1 / (S * sigma * np.sqrt(T))
+
+    # 3. VEGA (Identique Call/Put)
+    # Divisé par 100 pour avoir l'impact d'une variation de 1% de volatilité
+    vega = (S * np.sqrt(T) * pdf_d1) / 100
+
+    # 4. THETA
+    # Divisé par 365 pour avoir l'impact d'un jour qui passe
+    term1 = -(S * pdf_d1 * sigma) / (2 * np.sqrt(T))
+    if option_type == 'call':
+        term2 = r * K * np.exp(-r * T) * cdf_d2
+        theta = (term1 - term2) / 365
+    else:
+        term2 = r * K * np.exp(-r * T) * norm.cdf(-d2)
+        theta = (term1 + term2) / 365
+
+    return {
+        'delta': delta,
+        'gamma': gamma,
+        'vega': vega,
+        'theta': theta
+    }
