@@ -19,17 +19,19 @@ if __name__ == "__main__":
         b0, b1, b2, tau = calibrate_nelson_siegel(raw_rates)
         
         # Comparaison valeurs empiriques vs Nelson-Siegel [cite: 25]
-        T_smooth = np.linspace(raw_rates['T'].min(), raw_rates['T'].max(), 100)
+        T_smooth = np.linspace(raw_rates['T'].min(), raw_rates['T'].max(), 500)
         r_smooth = nelson_siegel(T_smooth, b0, b1, b2, tau)
         
         plt.figure(figsize=(10, 5))
         plt.scatter(raw_rates['T'], raw_rates['r'], color='red', label='Taux Bruts (Marché)')
         plt.plot(T_smooth, r_smooth, label='Courbe Nelson-Siegel (Lissée)')
-        plt.title("Structure par terme des taux implicites BTC")
+        plt.title("Nelson Siegel sur taux implicites BTC")
         plt.xlabel("Maturité T (Années)")
         plt.ylabel("Taux d'intérêt r")
         plt.legend()
         plt.grid(True)
-        plt.show()
+        plt.savefig('courbe_taux_nelson_siegel.png')
+        print("Graphique sauvegardé sous 'courbe_taux_nelson_siegel.png'")
+        plt.show() 
     else:
         print("Erreur : Pas assez de données pour extraire les taux.")
