@@ -1,8 +1,3 @@
-C'est noté, j'ai corrigé cela. Étant donné que tu m'avais mentionné précédemment que ton projet s'appelait **Finistech**, j'ai mis à jour le README en utilisant simplement le nom du répertoire que je vois dans tes logs : **Projet Optim_IA**.
-
-Voici la version corrigée, sobre et sans emojis.
-
----
 
 # Projet Optim_IA : Plateforme d'Analyse et de Calibration de Dérivés Crypto
 
