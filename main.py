@@ -1,29 +1,34 @@
-import pandas as pd
-# On importe les fonctions depuis le script de traitement data_process.py
-
+import matplotlib.pyplot as plt
 from src.data_process import get_deribit_data, process_and_filter_options
-if __name__ == "__main__":
-    CURRENCY = "BTC"
-    
-    # 1. Récupération brute
-    options_raw, futures_raw = get_deribit_data(CURRENCY)
-    
-    # 2. Extraction du spot dynamique depuis les futures
-    # On cherche le prix mid du perpétuel
-    perp = futures_raw[futures_raw['instrument_name'].str.contains('PERPETUAL')]
-    current_spot = perp['mid_price'].iloc[0] if not perp.empty else 65000
-    
-    # 3. Traitement et Filtrage (Phase 1 du projet)
-    options_cleaned = process_and_filter_options(options_raw, current_spot)
-    
-    # 4. Affichage des résultats pour ton rapport technique
-    print(f"Pipeline Deribit {CURRENCY}")
-    print(f"Prix Spot détecté : {current_spot}")
-    print(f"Instruments totaux : {len(options_raw) + len(futures_raw)}")
-    print(f"Options après filtres (Spread 25% + Arbitrage) : {len(options_cleaned)}")
-    
-    # Aperçu pour ton extraction des résultats (attendu dans le projet)
-    print(options_cleaned[['instrument_name', 'strike', 'mid_price', 'spread']].head())
+from src.rates_model import extract_implicit_rates, calibrate_nelson_siegel, nelson_siegel
 
-    # Sauvegarde optionnelle pour la Phase 2 (Nelson-Siegel)
-    # options_cleaned.to_csv("data_cleaned.csv")
+if __name__ == "__main__":
+    # --- PHASE 1 ---
+    options_raw, futures_raw = get_deribit_data("BTC")
+    # Simulation du spot (à dynamiser avec le futur perpétuel si possible)
+    spot = futures_raw['mid_price'].iloc[0] 
+    options_cleaned = process_and_filter_options(options_raw, spot)
+    
+    # --- PHASE 2 : COURBE DES TAUX ---
+    print("Extraction des taux implicites...")
+    raw_rates = extract_implicit_rates(options_cleaned, futures_raw)
+    
+    if not raw_rates.empty:
+        print(f"Calibration Nelson-Siegel sur {len(raw_rates)} maturités...")
+        b0, b1, b2, tau = calibrate_nelson_siegel(raw_rates)
+        
+        # Comparaison valeurs empiriques vs Nelson-Siegel [cite: 25]
+        T_smooth = np.linspace(raw_rates['T'].min(), raw_rates['T'].max(), 100)
+        r_smooth = nelson_siegel(T_smooth, b0, b1, b2, tau)
+        
+        plt.figure(figsize=(10, 5))
+        plt.scatter(raw_rates['T'], raw_rates['r'], color='red', label='Taux Bruts (Marché)')
+        plt.plot(T_smooth, r_smooth, label='Courbe Nelson-Siegel (Lissée)')
+        plt.title("Structure par terme des taux implicites BTC")
+        plt.xlabel("Maturité T (Années)")
+        plt.ylabel("Taux d'intérêt r")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+    else:
+        print("Erreur : Pas assez de données pour extraire les taux.")
