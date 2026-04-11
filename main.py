@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import os
 from src.data_process import get_deribit_data, process_and_filter_options
 from src.rates_model import (
@@ -12,7 +11,9 @@ from src.rates_model import (
 from src.SSVI import (
     get_implied_vol, 
     calibrate_ssvi_slice, 
-    get_ssvi_price
+    get_ssvi_price,
+    ssvi_variance_total,
+    calculate_greeks
 )
 
 if __name__ == "__main__":
@@ -26,7 +27,7 @@ if __name__ == "__main__":
     
     perp = futures_raw[futures_raw['instrument_name'].str.contains('PERPETUAL')]
     current_spot = perp['mid_price'].iloc[0] if not perp.empty else futures_raw['mid_price'].iloc[0]
-    print(f"Prix Spot détecté : {current_spot} USD")
+    print(f"Prix Spot détecté : {current_spot:.2f} USD")
     
     options_cleaned = process_and_filter_options(options_raw, current_spot)
     print(f"Options après filtrage : {len(options_cleaned)} / {len(options_raw)}")
@@ -38,11 +39,11 @@ if __name__ == "__main__":
     raw_rates = extract_implicit_rates(options_cleaned, futures_raw)
     
     if raw_rates.empty:
-        print("Erreur : Impossible d'extraire les taux. Fin du programme."); exit()
+        print("Erreur : Impossible d'extraire les taux."); exit()
 
     params_ns = calibrate_nelson_siegel(raw_rates)
     b0, b1, b2, tau = params_ns
-    mse_ns, mae_ns, df_rates_comp = evaluate_ns_performance(raw_rates, params_ns)
+    mse_ns, mae_ns, _ = evaluate_ns_performance(raw_rates, params_ns)
     print(f"Précision Nelson-Siegel (MAE) : {mae_ns:.6f}")
 
     # ==========================================================
@@ -50,60 +51,76 @@ if __name__ == "__main__":
     # ==========================================================
     print(f"\n--- Phase 3 : Calibration de la Volatilité SSVI ---")
     
-    results_vols = []
-    # 1. Calcul de l'IV pour chaque option (Newton-Raphson / Dichotomie)
+    vols_list = []
     for _, row in options_cleaned.iterrows():
+        # Utilisation de 'T' (calculé dans data_process)
         r_t = nelson_siegel(row['T'], b0, b1, b2, tau)
         iv = get_implied_vol(row['mid_price_usd'], current_spot, row['strike'], row['T'], r_t, row['option_type'])
         
         if not np.isnan(iv) and iv > 0:
             forward = current_spot * np.exp(r_t * row['T'])
             k = np.log(row['strike'] / forward)
-            w_market = (iv**2) * row['T']
-            results_vols.append({
-                'T': row['T'], 'k': k, 'iv': iv, 'w': w_market, 
+            vols_list.append({
+                'T': row['T'], 'k': k, 'iv': iv, 'w': (iv**2) * row['T'], 
                 'strike': row['strike'], 'option_type': row['option_type'],
                 'market_price': row['mid_price_usd'], 'r': r_t
             })
 
-    df_vols = pd.DataFrame(results_vols)
-    
-    # 2. Calibration SSVI par maturité et Comparaison des Prix
-    final_comparison = []
-    ssvi_params_storage = {} # Pour stocker rho et phi par maturité
+    df_vols = pd.DataFrame(vols_list)
+    ssvi_params_storage = {} 
 
     for t in sorted(df_vols['T'].unique()):
         slice_data = df_vols[df_vols['T'] == t]
-        if len(slice_data) < 3: continue # Besoin de points pour calibrer
+        if len(slice_data) < 3: continue
         
-        # Trouver Theta ATM (variance au strike le plus proche du forward)
+        # Variance ATM
         theta_atm = slice_data.iloc[abs(slice_data['k']).argmin()]['w']
         
-        # Calibration rho, phi
+        # Calibration
         rho, phi = calibrate_ssvi_slice(slice_data['k'].values, slice_data['w'].values, theta_atm)
         ssvi_params_storage[t] = {'theta': theta_atm, 'rho': rho, 'phi': phi}
-        
         print(f"Maturité T={t:.3f} | Rho={rho:.2f} | Phi={phi:.2f}")
 
-        # 3. Calcul des prix SSVI pour comparaison
-        for _, row in slice_data.iterrows():
-            p_ssvi = get_ssvi_price(current_spot, row['strike'], t, row['r'], theta_atm, rho, phi, row['option_type'])
-            final_comparison.append({
+    # ==========================================================
+    # PHASE 4 : CALCUL DES GRECQUES ET EXPORT FINAL
+    # ==========================================================
+    print(f"\n--- Phase 4 : Calcul des Grecques (via SSVI) ---")
+    
+    final_data = []
+    for _, row in df_vols.iterrows():
+        t = row['T']
+        if t in ssvi_params_storage:
+            p = ssvi_params_storage[t]
+            
+            # 1. Calcul de la volatilité lissée par le modèle SSVI
+            w_ssvi = ssvi_variance_total(row['k'], p['theta'], p['rho'], p['phi'])
+            sigma_ssvi = np.sqrt(max(0, w_ssvi / t))
+            
+            # 2. Calcul du prix théorique SSVI
+            p_ssvi = get_ssvi_price(current_spot, row['strike'], t, row['r'], p['theta'], p['rho'], p['phi'], row['option_type'])
+            
+            # 3. Calcul des Grecques
+            g = calculate_greeks(current_spot, row['strike'], t, row['r'], sigma_ssvi, row['option_type'])
+            
+            final_data.append({
                 'T': t, 'Strike': row['strike'], 'Type': row['option_type'],
                 'Market_Price': row['market_price'], 'SSVI_Price': p_ssvi,
-                'Error_USD': p_ssvi - row['market_price']
+                'IV_Market': row['iv'], 'IV_SSVI': sigma_ssvi,
+                'Delta': g['delta'], 'Gamma': g['gamma'], 'Vega': g['vega'], 'Theta': g['theta']
             })
 
-   
-    # RÉSULTATS FINAUX ET EXPORT
-    df_final = pd.DataFrame(final_comparison)
-    mae_price = np.mean(np.abs(df_final['Error_USD']))
+    df_final = pd.DataFrame(final_data)
     
-    print(f"\n--- Analyse de Performance Finale ---")
-    print(f"Erreur Moyenne sur les prix (MAE) : {mae_price:.2f} USD")
-    print("\nÉchantillon des écarts (10 premières lignes) :")
-    print(df_final[['T', 'Strike', 'Market_Price', 'SSVI_Price', 'Error_USD']].head(10).to_string(index=False))
+    # Métriques de prix
+    mae_price = np.mean(np.abs(df_final['SSVI_Price'] - df_final['Market_Price']))
+    print(f"Erreur moyenne de pricing : {mae_price:.2f} USD")
 
-    # Sauvegarde des résultats pour le GitHub
-    df_final.to_csv("resultats_calibration_finale.csv", index=False)
-    print("\nDonnées sauvegardées dans 'resultats_calibration_finale.csv'")
+    # Affichage des résultats
+    print("\nAperçu des résultats (5 premières lignes) :")
+    cols_show = ['T', 'Strike', 'Type', 'Delta', 'Gamma', 'Vega', 'Market_Price', 'SSVI_Price']
+    print(df_final[cols_show].head().to_string(index=False))
+
+    # Exportation CSV pour ton Github / Société Générale
+    output_file = "analyse_options_complete.csv"
+    df_final.to_csv(output_file, index=False)
+    print(f"\nPipeline terminé. Résultats exportés dans '{output_file}'")
