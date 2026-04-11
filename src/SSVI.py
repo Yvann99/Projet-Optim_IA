@@ -1,6 +1,8 @@
 import numpy as np
+import pandas as pd  # <--- Il manquait celui-là !
 from scipy.stats import norm
 from scipy.optimize import minimize
+
 
 def black_scholes_price(S, K, T, r, sigma, option_type='call'):
     """Calcul du prix théorique via Black-Scholes."""
@@ -142,3 +144,47 @@ def calculate_greeks(S, K, T, r, sigma, option_type='call'):
         'vega': vega,
         'theta': theta
     }
+def ssvi_phi_function(theta, eta, gamma):
+    """Fonction phi de Gatheral pour le lissage temporel."""
+    return eta / (pow(theta, gamma) * pow(1 + theta, 1 - gamma))
+
+def calibrate_full_surface_ssvi(df_vols):
+    """
+    Calibre les paramètres η (eta), γ (gamma) et ρ (rho) sur l'ensemble 
+    des maturités pour lisser la surface complète.
+    """
+    # On prépare les données : k (log-strike), theta (variance ATM), w (variance marché)
+    maturities = sorted(df_vols['T'].unique())
+    data_points = []
+    
+    for t in maturities:
+        subset = df_vols[df_vols['T'] == t]
+        theta_t = subset.iloc[abs(subset['k']).argmin()]['w']
+        for _, row in subset.iterrows():
+            data_points.append({
+                'k': row['k'], 'w_mkt': row['w'], 'theta': theta_t
+            })
+    
+    df_fit = pd.DataFrame(data_points)
+
+    def objective_surface(params):
+        rho, eta, gamma = params
+        # Contraintes de base
+        if abs(rho) >= 0.99 or eta <= 0 or not (0 <= gamma <= 0.5):
+            return 1e12
+        
+        # Calcul de phi pour chaque point en fonction de son theta
+        phi_vals = ssvi_phi_function(df_fit['theta'], eta, gamma)
+        
+        # Calcul de la variance prédite par SSVI
+        w_pred = (df_fit['theta'] / 2) * (
+            1 + rho * phi_vals * df_fit['k'] + 
+            np.sqrt((phi_vals * df_fit['k'] + rho)**2 + (1 - rho**2))
+        )
+        
+        return np.sum((df_fit['w_mkt'] - w_pred)**2)
+
+    # Initialisation standard : rho négatif, eta autour de 1, gamma à 0.25
+    res = minimize(objective_surface, [-0.4, 1.0, 0.3], 
+                   bounds=[(-0.95, 0.95), (0.01, 5), (0.01, 0.5)])
+    return res.x # [rho, eta, gamma]
