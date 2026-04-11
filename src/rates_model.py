@@ -61,3 +61,19 @@ def calibrate_nelson_siegel(df_rates):
     # Initialisation : beta0=taux long terme, beta1=pente, beta2=courbure
     res = minimize(objective, [0.05, -0.02, 0.02, 1.0])
     return res.x
+def evaluate_ns_performance(df_rates, params):
+    """
+    Calcule l'erreur quadratique moyenne (MSE) et l'erreur absolue moyenne (MAE)
+    pour comparer les valeurs empiriques et celles de Nelson-Siegel.
+    """
+    b0, b1, b2, tau = params
+    
+    # Calcul des prédictions du modèle pour les maturités T existantes
+    df_rates['r_ns'] = nelson_siegel(df_rates['T'], b0, b1, b2, tau)
+    
+    # Calcul des écarts
+    df_rates['error'] = df_rates['r'] - df_rates['r_ns']
+    mse = np.mean(df_rates['error']**2)
+    mae = np.mean(np.abs(df_rates['error']))
+    
+    return mse, mae, df_rates
