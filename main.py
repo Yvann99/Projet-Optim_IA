@@ -30,8 +30,15 @@ if __name__ == "__main__":
         plt.ylabel("Taux d'intérêt r")
         plt.legend()
         plt.grid(True)
+        
+        # 1. On sauvegarde l'image pour le rapport technique
         plt.savefig('courbe_taux_nelson_siegel.png')
         print("Graphique sauvegardé sous 'courbe_taux_nelson_siegel.png'")
-        plt.show() 
+        
+        # 2. On commente plt.show() pour éviter de bloquer le terminal
+        # plt.show() 
+        
+        # 3. On ferme proprement le graphique en mémoire
+        plt.close() 
     else:
         print("Erreur : Pas assez de données pour extraire les taux.")
