@@ -1,0 +1,99 @@
+import numpy as np
+from scipy.stats import norm
+from scipy.optimize import minimize
+
+def black_scholes_price(S, K, T, r, sigma, option_type='call'):
+    """Calcul du prix théorique via Black-Scholes."""
+    if sigma < 1e-7 or T < 1e-7:
+        return max(0, S - K) if option_type == 'call' else max(0, K - S)
+        
+    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    
+    if option_type == 'call':
+        return S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+    else:
+        return K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+
+def black_scholes_vega(S, K, T, r, sigma):
+    """Calcule le Vega : dérivée du prix par rapport à la volatilité."""
+    if sigma < 1e-7 or T < 1e-7:
+        return 0.0
+    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    return S * np.sqrt(T) * norm.pdf(d1)
+
+def get_implied_vol(price, S, K, T, r, option_type='call'):
+    """
+    Extrait l'IV en utilisant Newton-Raphson avec repli sur dichotomie.
+    """
+    intrinsic = max(0, S - K) if option_type == 'call' else max(0, K - S)
+    if price <= intrinsic:
+        return 0.0
+
+    #Tentative avec Newton-Raphson
+    sigma_n = 0.5  # Estimation initiale (50%)
+    for i in range(20):
+        p = black_scholes_price(S, K, T, r, sigma_n, option_type)
+        v = black_scholes_vega(S, K, T, r, sigma_n)
+        
+        diff = p - price
+        if abs(diff) < 1e-8:
+            return sigma_n
+        
+        # Si le Vega est trop faible, Newton-Raphson va échouer -> on passe à la dichotomie
+        if abs(v) < 1e-7:
+            break
+            
+        sigma_n = sigma_n - diff / v
+        
+        # Si Newton projette une valeur aberrante, on arrête
+        if sigma_n <= 0 or sigma_n > 5.0:
+            break
+    
+    # --- Repli sur la Dichotomie (Bisection) ---
+    low, high = 0.0001, 5.0
+    for i in range(100):
+        mid = (low + high) / 2
+        p_mid = black_scholes_price(S, K, T, r, mid, option_type)
+        if abs(p_mid - price) < 1e-7:
+            return mid
+        if p_mid < price:
+            low = mid
+        else:
+            high = mid
+    return (low + high) / 2
+
+#MODÈLE SSVI
+
+def ssvi_variance_total(k, theta, rho, phi):
+    """Formule de la variance totale SSVI."""
+    return (theta / 2.0) * (1.0 + rho * phi * k + np.sqrt((phi * k + rho)**2 + (1.0 - rho**2)))
+
+def calibrate_ssvi_slice(k_arr, w_market_arr, theta_atm):
+    """Calcule rho et phi pour une maturité donnée."""
+    def objective_ssvi(params):
+        rho, phi = params
+        if abs(rho) >= 0.99 or phi <= 1e-6:
+            return 1e12
+        w_pred = ssvi_variance_total(k_arr, theta_atm, rho, phi)
+        return np.sum((w_market_arr - w_pred)**2)
+
+    res = minimize(objective_ssvi, [0.0, 0.5], bounds=[(-0.95, 0.95), (1e-4, 10)])
+    return res.x
+def get_ssvi_price(S, K, T, r, theta_atm, rho, phi, option_type='call'):
+    """
+    Calcule le prix d'une option en utilisant la variance du modèle SSVI.
+    """
+    # 1. Calcul du log-strike forward
+    forward = S * np.exp(r * T)
+    k = np.log(K / forward)
+    
+    # 2. Calcul de la variance totale SSVI
+    w_pred = ssvi_variance_total(k, theta_atm, rho, phi)
+    
+    # 3. Conversion variance totale -> volatilité sigma
+    # w = sigma^2 * T => sigma = sqrt(w / T)
+    sigma_ssvi = np.sqrt(max(0, w_pred / T))
+    
+    # 4. Calcul du prix via Black-Scholes
+    return black_scholes_price(S, K, T, r, sigma_ssvi, option_type)
