@@ -188,3 +188,66 @@ def calibrate_full_surface_ssvi(df_vols):
     res = minimize(objective_surface, [-0.4, 1.0, 0.3], 
                    bounds=[(-0.95, 0.95), (0.01, 5), (0.01, 0.5)])
     return res.x # [rho, eta, gamma]
+# --- NOUVELLES FONCTIONS POUR LA CALIBRATION STRUCTURELLE ---
+
+def get_theta_t(t, kappa, v0, v_inf):
+    """
+    Calcule la variance totale ATM (theta_t) avec retour à la moyenne.
+    Formule : [(1 - exp(-kappa*t))/(kappa*t) * (v0 - v_inf) + v_inf] * t
+    """
+    # On simplifie (t) au dénominateur et au numérateur
+    val = ((1 - np.exp(-kappa * t)) / kappa) * (v0 - v_inf) + v_inf * t
+    return max(1e-9, val)
+
+def get_phi_theta_power(theta, eta, lmbda):
+    """
+    Calcule la fonction de courbure phi(theta) selon la loi de puissance :
+    phi(theta) = eta / (theta^lmbda)
+    """
+    return eta / (theta**lmbda)
+
+def calibrate_ssvi_structure_2steps(df_vols, current_spot):
+    """
+    Calibration en deux étapes :
+    1. ATM : Estimation de kappa, v0, v_inf
+    2. Globale : Estimation de rho, eta, lambda
+    """
+    
+    # --- ÉTAPE 1 : Options proches de la monnaie (ATM) ---
+    df_atm = df_vols[abs(df_vols['k']) < 0.1].copy()
+    
+    def obj_step1(params):
+        kappa, v0, v_inf = params
+        if kappa <= 0 or v0 <= 0 or v_inf <= 0: return 1e12
+        error = 0
+        for _, row in df_atm.iterrows():
+            theta_t = get_theta_t(row['T'], kappa, v0, v_inf)
+            sigma_t = np.sqrt(theta_t / row['T'])
+            p_model = black_scholes_price(current_spot, row['strike'], row['T'], row['r'], sigma_t, row['option_type'])
+            error += (p_model - row['market_price'])**2
+        return error
+
+    res1 = minimize(obj_step1, [1.0, 0.4, 0.4], bounds=[(0.01, 10), (0.01, 2), (0.01, 2)])
+    kappa_f, v0_f, v_inf_f = res1.x
+
+    # --- ÉTAPE 2 : Ensemble de la surface ---
+    def obj_step2(params):
+        rho, eta, lmbda = params
+        if abs(rho) >= 0.99 or eta <= 0 or not (0 < lmbda <= 1.0): return 1e12
+        error = 0
+        for _, row in df_vols.iterrows():
+            theta_t = get_theta_t(row['T'], kappa_f, v0_f, v_inf_f)
+            phi_t = get_phi_theta_power(theta_t, eta, lmbda)
+            w_pred = ssvi_variance_total(row['k'], theta_t, rho, phi_t)
+            sigma_pred = np.sqrt(max(1e-9, w_pred / row['T']))
+            p_model = black_scholes_price(current_spot, row['strike'], row['T'], row['r'], sigma_pred, row['option_type'])
+            error += (p_model - row['market_price'])**2
+        return error
+
+    res2 = minimize(obj_step2, [-0.5, 1.0, 0.5], bounds=[(-0.95, 0.95), (0.01, 5), (0.01, 1.0)])
+    rho_f, eta_f, lmbda_f = res2.x
+
+    return {
+        'kappa': kappa_f, 'v0': v0_f, 'v_inf': v_inf_f,
+        'rho': rho_f, 'eta': eta_f, 'lmbda': lmbda_f
+    }
