@@ -81,3 +81,45 @@ Theta (Θ=−208.34) : L'érosion temporelle est particulièrement marquée. L'o
 * **Conclusion Technique**
 
 L'alignement quasi parfait entre les données brutes et les données modélisées confirme la validité de l'approche paramétrique. Le passage d'une donnée transactionnelle (prix Deribit) à une donnée analytique (grecques SSVI) permet désormais d'envisager des stratégies de couverture dynamique (Delta-Hedging) ou d'arbitrage de volatilité.
+
+## Modélisation de la Surface de Volatilité : Approche Structurelle SSVI
+
+Le projet a évolué d'un lissage par échéance (slice-by-slice) vers une **calibration globale et structurelle** basée sur les travaux de Gatheral & Jacquier. Cette méthodologie assure la cohérence temporelle de la surface et garantit l'absence d'arbitrage statique.
+
+### 1. Fondements Mathématiques du Modèle
+
+Le modèle exprime la variance totale $w(k, t)$ comme une fonction du log-forward moneyness $k = \ln(K/F_T)$ et de la variance ATM $\theta_t$. 
+
+#### Structure de la Variance ATM (Term Structure)
+Pour lier les échéances entre elles, nous modélisons l'évolution de la variance At-The-Money via une dynamique de retour à la moyenne :
+$$\theta_t = \left[ \frac{1 - e^{-\kappa t}}{\kappa t} (\nu_0 - \nu_\infty) + \nu_\infty \right] t$$
+* **$\nu_0$** : Variance initiale (court terme).
+* **$\nu_\infty$** : Variance de long terme.
+* **$\kappa$** : Vitesse de retour à la moyenne de la volatilité.
+
+
+
+#### Géométrie du Smile (SSVI)
+La forme du sourire de volatilité est dictée par l'équation maîtresse :
+$$w(k, t) = \frac{\theta_t}{2} \left[ 1 + \rho \phi(\theta_t) k + \sqrt{(\phi(\theta_t) k + \rho)^2 + (1 - \rho^2)} \right]$$
+Avec une fonction de courbure en loi de puissance : $\phi(\theta_t) = \eta \theta_t^{-\lambda}$.
+
+### 2. Procédure de Calibration en Deux Étapes
+
+La robustesse du modèle repose sur une optimisation séquentielle qui sépare la structure temporelle de la géométrie des strikes.
+
+#### Étape 1 : Calibration de la Structure ATM
+L'objectif est d'ajuster les paramètres temporels ($\kappa, \nu_0, \nu_\infty$) en minimisant l'écart entre les prix du modèle et les prix de marché uniquement sur les options proches de la monnaie (ATM) :
+$$\min_{\kappa, \nu_0, \nu_\infty} \sum_{i, ATM} (Prix_{BS}(\sigma_t = \sqrt{\theta_t/t}) - Price_{Mkt, t})^2$$
+
+#### Étape 2 : Calibration de la Surface Globale
+Une fois la structure temporelle fixée, nous estimons les paramètres de forme ($\rho, \eta, \lambda$) sur l'intégralité des strikes disponibles. Cette étape définit l'asymétrie (Skew) et la courbure (Smile) de la surface :
+$$\min_{\rho, \eta, \lambda} \sum_{i, j} (Prix_{BS}(\sigma_{i,j} = \sqrt{w(k,t)/t}) - Price_{Mkt, i,j})^2$$
+
+
+
+### 3. Avantages de l'Approche Structurelle
+
+* **Cohérence Temporelle** : Contrairement au lissage indépendant, cette méthode impose une loi d'évolution logique de la volatilité entre les échéances.
+* **Absence d'Arbitrage** : Les contraintes sur les paramètres ($\eta > 0, \lambda \in ]0,1], |\rho| < 1$) garantissent une surface exploitable pour le trading et la gestion de risques.
+* **Interpolation Robuste** : Le modèle permet de pricer avec précision des options sur des maturités non cotées en s'appuyant sur la dynamique de retour à la moyenne calibrée.
