@@ -10,8 +10,9 @@ from src.rates_model import (
 )
 from src.SSVI import (
     get_implied_vol, 
-    calibrate_full_surface_ssvi,  # Nouvelle fonction globale
-    ssvi_phi_function,           # Pour reconstruire phi(theta)
+    calibrate_ssvi_structure_2steps,  # Nouvelle fonction de calibration en 2 étapes
+    get_theta_t,                      # Calcul de la variance ATM structurelle
+    get_phi_theta_power,              # Loi de puissance pour phi
     ssvi_variance_total,
     get_ssvi_price,
     calculate_greeks
@@ -48,10 +49,11 @@ if __name__ == "__main__":
     print(f"Précision Nelson-Siegel (MAE) : {mae_ns:.6f}")
 
     # ==========================================================
-    # PHASE 3 : VOLATILITÉ IMPLICITE ET SURFACE SSVI GLOBALE
+    # PHASE 3 : CALIBRATION STRUCTURELLE SSVI
     # ==========================================================
-    print(f"\n--- Phase 3 : Calibration de la Surface SSVI Globale ---")
+    print(f"\n--- Phase 3 : Calibration Structurelle (Gatheral & Jacquier) ---")
     
+    # 1. Extraction de la Volatilité Implicite brute pour la calibration
     vols_list = []
     for _, row in options_cleaned.iterrows():
         r_t = nelson_siegel(row['T'], b0, b1, b2, tau)
@@ -68,43 +70,40 @@ if __name__ == "__main__":
 
     df_vols = pd.DataFrame(vols_list)
 
-    # Calibration de la surface complète (Rho, Eta, Gamma)
-    rho_surf, eta_surf, gamma_surf = calibrate_full_surface_ssvi(df_vols)
+    # 2. Lancement de la calibration en deux étapes (ATM puis Surface)
+    p = calibrate_ssvi_structure_2steps(df_vols, current_spot)
     
-    print(f"Paramètres Surface Calibrés :")
-    print(f"  > Rho (Skew)    : {rho_surf:.4f}")
-    print(f"  > Eta (Vol-of-Vol): {eta_surf:.4f}")
-    print(f"  > Gamma (Power) : {gamma_surf:.4f}")
+    print(f"Paramètres ATM (Temps)  : Kappa={p['kappa']:.4f}, V0={p['v0']:.4f}, V_inf={p['v_inf']:.4f}")
+    print(f"Paramètres Smile (Forme): Rho={p['rho']:.4f}, Eta={p['eta']:.4f}, Lambda={p['lmbda']:.4f}")
 
-    # Reconstruction des paramètres par maturité pour le pricing
+    # 3. Reconstruction de la surface pour le calcul des résultats
     ssvi_params_storage = {}
     for t in sorted(df_vols['T'].unique()):
-        subset_t = df_vols[df_vols['T'] == t]
-        # On définit theta_t comme la variance ATM à cette maturité
-        theta_t = subset_t.iloc[abs(subset_t['k']).argmin()]['w']
-        # Calcul de phi(theta) selon la loi de puissance de Gatheral
-        phi_t = ssvi_phi_function(theta_t, eta_surf, gamma_surf)
+        # Utilisation des paramètres calibrés pour reconstruire theta et phi à chaque T
+        theta_t = get_theta_t(t, p['kappa'], p['v0'], p['v_inf'])
+        phi_t = get_phi_theta_power(theta_t, p['eta'], p['lmbda'])
         
-        ssvi_params_storage[t] = {'theta': theta_t, 'rho': rho_surf, 'phi': phi_t}
+        ssvi_params_storage[t] = {'theta': theta_t, 'rho': p['rho'], 'phi': phi_t}
 
     # ==========================================================
     # PHASE 4 : CALCUL DES GRECQUES ET EXPORT FINAL
     # ==========================================================
-    print(f"\n--- Phase 4 : Calcul des Grecques (via Surface Lissée) ---")
+    print(f"\n--- Phase 4 : Calcul des Grecques (via Surface Structurelle) ---")
     
     final_data = []
     for _, row in df_vols.iterrows():
         t = row['T']
-        p = ssvi_params_storage[t]
+        param_t = ssvi_params_storage[t]
         
-        # 1. Volatilité lissée issue de la surface globale
-        w_ssvi = ssvi_variance_total(row['k'], p['theta'], p['rho'], p['phi'])
+        # 1. Volatilité lissée issue du modèle SSVI calibré
+        w_ssvi = ssvi_variance_total(row['k'], param_t['theta'], param_t['rho'], param_t['phi'])
         sigma_ssvi = np.sqrt(max(0, w_ssvi / t))
         
         # 2. Prix théorique cohérent avec la surface
-        p_ssvi = get_ssvi_price(current_spot, row['strike'], t, row['r'], p['theta'], p['rho'], p['phi'], row['option_type'])
+        p_ssvi = get_ssvi_price(current_spot, row['strike'], t, row['r'], 
+                                param_t['theta'], param_t['rho'], param_t['phi'], row['option_type'])
         
-        # 3. Grecques analytiques
+        # 3. Grecques analytiques basées sur sigma_ssvi
         g = calculate_greeks(current_spot, row['strike'], t, row['r'], sigma_ssvi, row['option_type'])
         
         final_data.append({
@@ -117,10 +116,10 @@ if __name__ == "__main__":
     df_final = pd.DataFrame(final_data)
     mae_price = np.mean(np.abs(df_final['SSVI_Price'] - df_final['Market_Price']))
     
-    print(f"Erreur moyenne de pricing sur la surface : {mae_price:.2f} USD")
-    print("\nAperçu des 5 premières lignes du rapport final :")
+    print(f"Erreur moyenne de pricing (MAE) : {mae_price:.2f} USD")
+    print("\nAperçu des résultats (5 premières lignes) :")
     print(df_final[['T', 'Strike', 'Type', 'Delta', 'IV_SSVI', 'SSVI_Price']].head().to_string(index=False))
 
     # Exportation finale
-    df_final.to_csv("surface_vol_complete_btc.csv", index=False)
-    print(f"\nFichier 'surface_vol_complete_btc.csv' généré avec succès.")
+    df_final.to_csv("surface_vol_structurelle_btc.csv", index=False)
+    print(f"\nFichier 'surface_vol_structurelle_btc.csv' généré avec succès.")
