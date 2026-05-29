@@ -59,9 +59,8 @@ def plot_style_comparison(df_final):
 if __name__ == "__main__":
     CURRENCY = "BTC"
     
-    # ==========================================================
     # PHASE 1 : RÉCUPÉRATION ET NETTOYAGE
-    # ==========================================================
+    
     print(f"--- Phase 1 : Récupération et Nettoyage ({CURRENCY}) ---")
     options_raw, futures_raw = get_deribit_data(CURRENCY)
     
@@ -72,9 +71,7 @@ if __name__ == "__main__":
     options_cleaned = process_and_filter_options(options_raw, current_spot)
     print(f"Options après filtrage : {len(options_cleaned)} / {len(options_raw)}")
 
-    # ==========================================================
     # PHASE 2 : COURBE DES TAUX (NELSON-SIEGEL)
-    # ==========================================================
     print(f"\n--- Phase 2 : Reconstruction de la courbe des taux ---")
     raw_rates = extract_implicit_rates(options_cleaned, futures_raw)
     
@@ -86,9 +83,9 @@ if __name__ == "__main__":
     _, mae_ns, _ = evaluate_ns_performance(raw_rates, params_ns)
     print(f"Précision Nelson-Siegel (MAE) : {mae_ns:.6f}")
 
-    # ==========================================================
+
     # PHASE 3 : CALIBRATION STRUCTURELLE SSVI
-    # ==========================================================
+    
     print(f"\n--- Phase 3 : Calibration Structurelle (Gatheral & Jacquier) ---")
     
     vols_list = []
@@ -120,9 +117,8 @@ if __name__ == "__main__":
         phi_t = get_phi_theta_power(theta_t, p['eta'], p['lmbda'])
         ssvi_params_storage[t] = {'theta': theta_t, 'rho': p['rho'], 'phi': phi_t}
 
-    # ==========================================================
     # PHASE 4 : CALCUL DES RÉSULTATS ET EXPORT
-    # ==========================================================
+
     print(f"\n--- Phase 4 : Calcul des Grecques et Comparaison ---")
     
     final_data = []
