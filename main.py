@@ -153,3 +153,79 @@ if __name__ == "__main__":
 
     # --- VISUALISATION (Dernière étape) ---
     plot_style_comparison(df_final)
+    
+    # PHASE 4 : STRATÉGIE ET COUVERTURE DYNAMIQUE
+   
+    from src.derivatives_portfolio import pricer_hors_grille_ssvi, tracer_payoff_bull_call_spread, optimiser_portefeuille_immunise
+    
+    print("\n" + "="*60)
+    print("--- PHASE 4 : CRÉATION DE PRODUITS & COUVERTURE DYNAMIQUE ---")
+    print("="*60)
+    
+    # 1. Définition du produit hors-grille (Bull Call Spread à 30 jours)
+    T_produit = 30 / 365 
+    K1 = float(np.round(current_spot + 1500, -2))  # Strike Achat (Hors-grille)
+    K2 = float(np.round(current_spot + 5500, -2))  # Strike Vente (Hors-grille)
+    
+    p1, sig1, r1, g1 = pricer_hors_grille_ssvi(current_spot, K1, T_produit, params_ns, p)
+    p2, sig2, r2, g2 = pricer_hors_grille_ssvi(current_spot, K2, T_produit, params_ns, p)
+    
+    prix_spread = p1 - p2
+    
+    # Principe de l'additivité des grecques mono-sous-jacent
+    grecques_spread = {k: g1[k] - g2[k] for k in g1.keys()}
+    
+    print(f"[1] Spécifications du produit hors-grille :")
+    print(f"    Type : Bull Call Spread (Maturité = {T_produit*365:.1f} jours)")
+    print(f"    Strikes : K1 = {K1} USD (vol={sig1*100:.2f}%) | K2 = {K2} USD (vol={sig2*100:.2f}%)")
+    print(f"    Taux d'intérêt appliqués : r(K1)={r1*100:.3f}% | r(K2)={r2*100:.3f}%")
+    print(f"    Prix du Produit : {prix_spread:.2f} USD")
+    print(f"    Grecques combinés : Delta={grecques_spread['delta']:.4f} | Gamma={grecques_spread['gamma']:.6f} | Vega={grecques_spread['vega']:.4f}")
+    
+    # 2. Sélection de deux options réelles liquides du marché pour la couverture
+    options_dispo = df_final[df_final['Type'] == 'call'].sort_values('Vega', ascending=False)
+    opt2_mkt = options_dispo.iloc[0]
+    opt3_mkt = options_dispo.iloc[1]
+    
+    # Définition des grecques des piliers de couverture
+    g_fut = {'delta': 1.0, 'gamma': 0.0, 'vega': 0.0} # Le Future permanent
+    g_opt2 = {'delta': opt2_mkt['Delta'], 'gamma': opt2_mkt['Gamma'], 'vega': opt2_mkt['Vega']}
+    g_opt3 = {'delta': opt3_mkt['Delta'], 'gamma': opt3_mkt['Gamma'], 'vega': opt3_mkt['Vega']}
+    
+    # 3. Optimisation numérique de la neutralité
+    w_fut, w_o2, w_o3 = optimiser_portefeuille_immunise(grecques_spread, g_fut, g_opt2, g_opt3)
+    
+    print(f"\n[2] Composition du Portefeuille Immunisé (Delta-Gamma-Vega Neutre) :")
+    print(f"    Position Courte : Vente de 1 x Bull Call Spread")
+    print(f"    Position Future : {'Achat' if w_fut > 0 else 'Vente'} de {abs(w_fut):.4f} x Futures contrats")
+    print(f"    Position Option A : {'Achat' if w_o2 > 0 else 'Vente'} de {abs(w_o2):.4f} x Calls (Strike {opt2_mkt['Strike']})")
+    print(f"    Position Option B : {'Achat' if w_o3 > 0 else 'Vente'} de {abs(w_o3):.4f} x Calls (Strike {opt3_mkt['Strike']})")
+    
+    # 4. Scénario de Stress Test (1 semaine plus tard : Spot +10%, Vol -10% Absolu)
+    print(f"\n[3] Simulation de Stress Test à t + 7 jours :")
+    dt = 7 / 365
+    S_stress = current_spot * 1.10
+    
+    # Recalcul sous stress du produit vendu
+    p1_stress, _, _, _ = pricer_hors_grille_ssvi(S_stress, K1, T_produit - dt, params_ns, p)
+    p2_stress, _, _, _ = pricer_hors_grille_ssvi(S_stress, K2, T_produit - dt, params_ns, p)
+    
+    # Choc absolu de -10% de volatilité répercuté sur le prix
+    prix_spread_stress = (p1_stress - p2_stress) + (grecques_spread['vega'] * -10)
+    pnl_produit = -(prix_spread_stress - prix_spread) # Vendu
+    
+    # Recalcul sous stress de la couverture
+    pnl_hedge_fut = w_fut * (S_stress - current_spot)
+    pnl_hedge_o2 = w_o2 * (((opt2_mkt['SSVI_Price'] * 1.10) + (g_opt2['vega'] * -10)) - opt2_mkt['SSVI_Price'])
+    pnl_hedge_o3 = w_o3 * (((opt3_mkt['SSVI_Price'] * 1.10) + (g_opt3['vega'] * -10)) - opt3_mkt['SSVI_Price'])
+    
+    pnl_global = pnl_produit + pnl_hedge_fut + pnl_hedge_o2 + pnl_hedge_o3
+    
+    print(f"    P&L Option Structurée Vendue : {pnl_produit:.2f} USD")
+    print(f"    P&L Jambe de Couverture : {pnl_hedge_fut + pnl_hedge_o2 + pnl_hedge_o3:.2f} USD")
+    print(f"    --------------------------------------------------------")
+    print(f"    P&L VARIATION FINALE DU PORTEFEUILLE : {pnl_global:.2f} USD")
+    print("="*60)
+    
+    # 5. Affichage du profil graphique du Payoff
+    tracer_payoff_bull_call_spread(K1, K2, prix_spread)
