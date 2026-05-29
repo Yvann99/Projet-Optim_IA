@@ -156,7 +156,7 @@ if __name__ == "__main__":
     
     # PHASE 4 : STRATÉGIE ET COUVERTURE DYNAMIQUE
    
-    from src.derivatives_portfolio import pricer_hors_grille_ssvi, tracer_payoff_bull_call_spread, optimiser_portefeuille_immunise
+    from derivatives_portfolio import pricer_hors_grille_ssvi, tracer_payoff_bull_call_spread, optimiser_portefeuille_immunise
     
     print("\n" + "="*60)
     print("--- PHASE 4 : CRÉATION DE PRODUITS & COUVERTURE DYNAMIQUE ---")
